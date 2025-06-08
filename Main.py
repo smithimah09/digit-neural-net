@@ -1,71 +1,173 @@
 import pygame
+import pygame_widgets
 from pygame_widgets.button import Button
+import math
+from NeuralNet import MLP
+import numpy as np
 
-colors = [[255] * 28 for _ in range(28)]
+WHITE = (255, 255, 255)
+BLACK = (0, 0, 0)
+BACKGROUND = (100, 100, 255)
+UPDATE = 0.01
+SLEEP = 0.5
+
+pygame.init()
+
+pygame.font.init()
+label_font = pygame.font.SysFont('Comic Sans MS', 25)
+prob_font = pygame.font.SysFont('Comic Sans MS', 15)
+
+clock = pygame.time.Clock()
+
+width, height = 720, 500
+screen = pygame.display.set_mode((width, height))
+screen.fill(BACKGROUND)
+
+drawing_rect = pygame.Rect(40, 40, 380, 380)
+drawing_pane = pygame.Surface((380, 380))
+drawing_pane.fill(WHITE)
+
+pixel_pane = pygame.Surface((380, 380))
+pixel_pane.fill(WHITE)
+pixelated = False
+
+predictions = pygame.Surface((220, 380))
+predictions.fill(WHITE)
+
+probabilities = pygame.Surface((40, 380))
+probabilities.fill(BACKGROUND)
+
+reset = Button(
+    screen,
+    60,
+    430,
+    160,
+    40,
+
+    text='Clear',
+    fontSize=25,
+    inactiveColour=(255,255,255),
+    hoverColour=(200,200,200),
+    pressedColour=(100,100,100),
+    radius=5,
+    onClick=lambda: clear()
+)
+toggle = Button(
+    screen,
+    240,
+    430,
+    160,
+    40,
+
+    text='Pixelated',
+    fontSize=25,
+    inactiveColour=(255,255,255),
+    hoverColour=(200,200,200),
+    pressedColour=(100,100,100),
+    radius=5,
+    onClick=lambda: toggle_view()
+)
+
+net = MLP.load("Models/98.31%")
 
 def main():
 
-    # pygame setup
-    pygame.init()
-
-    width, height = 720, 500
-    screen = pygame.display.set_mode((width, height))
-
     running = True
-    drawing = False
+    dt = 0
+    stop_time = 0
 
-    reset = Button(
-        screen,
-        600,
-        40,
-        80,
-        40,
-
-        text='Reset',
-        fontSize=50,
-        inactiveColour=(117,150,86),
-        hoverColour=(125,166,79),
-        pressedColour=(128,182,76),
-        radius=20,
-        onClick=lambda: resetColors()
-    )
+    draw_labels()
 
     while running:
-        # poll for events
-        # pygame.QUIT event means the user clicked X to close your window
-        for event in pygame.event.get():
+        
+        eventList = pygame.event.get()
+        for event in eventList:
             if event.type == pygame.QUIT:
                 running = False
-            if event.type == pygame.MOUSEBUTTONDOWN:
-                drawing = True
-            if event.type == pygame.MOUSEBUTTONUP:
-                drawing = False
-                    
-        if drawing:
-            x, y = pygame.mouse.get_pos()
-            i, j = (int)((x-40)/15), (int)((y-40)/15)
-            if i >= 0 and i < 28 and j >= 0 and j < 28:
-                colors[i][j] = 0
-                if i+1<28:
-                    colors[i+1][j] = 40
-                if j+1<28:
-                    colors[i][j+1] = 40
-                if i+1<28 and j+1<28:
-                    colors[i+1][j+1] = 80
                 
+            if event.type == pygame.MOUSEMOTION and not pixelated:
+                if pygame.mouse.get_pressed()[0]:
+                    last_pos = (event.pos[0]-event.rel[0], event.pos[1]-event.rel[1])
+                    draw_line(last_pos, pygame.mouse.get_pos())
+                    stop_time = 0
         
-        for i in range(28):
-            for j in range(28):
-                squareRect = pygame.Rect(40+i*15, 40+j*15, 12, 12)
-                pygame.draw.rect(screen, (colors[i][j], colors[i][j], colors[i][j]), squareRect)
+        if len(eventList) == 0:
+            stop_time += dt
+        
+        if dt > UPDATE and stop_time < SLEEP and not pixelated:
+            draw_chart(net.run(classify()))
+            dt = 0
 
-        # flip() the display to put your work on screen
+        if not pixelated:
+            screen.blit(drawing_pane, (40, 40))
+        else:
+            screen.blit(pixel_pane, (40, 40))
+        screen.blit(predictions, (460, 40))
+        screen.blit(probabilities, (680, 40))
+
+        pygame_widgets.update(eventList)
         pygame.display.flip()
+
+        dt += clock.tick(60) / 1000
 
     pygame.quit()
 
-def resetColors():
-    colors = [[255] * 28 for _ in range(28)]
+def draw_labels():
+    for i in range(10):
+        screen.blit(label_font.render(str(i), True, BLACK), (440, 40+i*38))
+
+def draw_chart(probs):
+    predictions.fill(WHITE)
+    probabilities.fill(BACKGROUND)
+    for i in range(10):
+        pygame.draw.rect(predictions, (50, 50, 200), (0, 8+i*38, probs[0][i]*220, 20))
+        probabilities.blit(prob_font.render(percent(probs[0][i]), True, BLACK), (5, 2+i*38))
+
+def percent(prob):
+    return str(round(prob*100)) + "%"
+
+# adapted from https://github.com/drewvlaz/draw-mnist/blob/master/main.py
+def draw_line(start, end):
+    dy = end[1] - start[1]
+    dx = end[0] - start[0]
+
+    distance = round(math.sqrt(dy**2 + dx**2))
+    for i in range(distance):
+        x, y = start[0]+i/distance*dx, start[1]+i/distance*dy
+        if drawing_rect.collidepoint(x, y):
+            pygame.draw.circle(drawing_pane, BLACK, (x - 40, y - 40), 12)
+
+def classify():
+    scaledBackground = pygame.transform.smoothscale(drawing_pane, (28, 28))
+    image = pygame.surfarray.array3d(scaledBackground)
+    image = abs(1-image/253)
+    image = np.mean(image, axis=2)
+
+    image = image.transpose()
+    image = image.ravel()
+    return image
+
+def clear():
+    drawing_pane.fill(WHITE)
+    global pixelated
+    if pixelated:
+        pixelated = False
+        toggle.setText("Pixelated")
+
+def toggle_view():
+    global pixelated
+    if toggle.string=="Pixelated":
+        toggle.setText("Draw")
+        pixelated = True
+
+        image = classify().reshape(28, 28)
+        image = 255 - image * 255
+        for i in range(len(image)):
+            for j in range(len(image[i])):
+                pygame.draw.rect(pixel_pane, (image[i][j], image[i][j], image[i][j]), (int(13.6*j), int(13.6*i), 13, 13))
+    else:
+        toggle.setText("Pixelated")
+        pixelated = False
 
 if __name__=="__main__":
     main()
